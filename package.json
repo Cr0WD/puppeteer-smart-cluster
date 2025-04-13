@@ -1,0 +1,78 @@
+{
+  "version": "1.0.0",
+  "license": "MIT",
+  "name": "puppeteer-smart-cluster",
+  "author": {
+    "email": "freshcrowd@gmail.com",
+    "name": "Denis Orlov",
+    "url": "https://github.com/Cr0WD"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cr0WD/puppeteer-smart-cluster"
+  },
+  "keywords": [
+    "puppeteer",
+    "chrome",
+    "headless",
+    "automation",
+    "puppeteer-cluster"
+  ],
+  "module": "dist/puppeteer-smart-cluster.esm.js",
+  "main": "dist/index.js",
+  "typings": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "start": "tsdx watch",
+    "build": "tsdx build",
+    "lint": "tsdx lint",
+    "prepare": "install-peers && tsdx build",
+    "postinstall": "manypkg fix && manypkg check"
+  },
+  "husky": {
+    "hooks": {
+      "pre-commit": "tsdx lint"
+    }
+  },
+  "prettier": {
+    "printWidth": 100,
+    "trailingComma": "es5",
+    "semi": false,
+    "singleQuote": true,
+    "bracketSpacing": true,
+    "arrowParens": "avoid",
+    "endOfLine": "lf",
+    "useTabs": true,
+    "tabWidth": 4
+  },
+  "publishConfig": {
+    "access": "public",
+    "branches": [
+      "main"
+    ]
+  },
+  "peerDependencies": {
+    "puppeteer": "^24.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.24.0",
+    "@manypkg/cli": "0.23.0",
+    "@typescript-eslint/eslint-plugin": "8.29.1",
+    "@typescript-eslint/parser": "8.29.1",
+    "eslint": "9.24.0",
+    "eslint-config-prettier": "^10.1.2",
+    "eslint-import-resolver-typescript": "4.3.2",
+    "eslint-plugin-import": "2.31.0",
+    "eslint-plugin-promise": "7.2.1",
+    "eslint-plugin-security": "3.0.1",
+    "eslint-plugin-unicorn": "58.0.0",
+    "install-peers-cli": "^2.2.0",
+    "prettier": "3.5.3",
+    "puppeteer": "^24.0.0",
+    "tsdx": "^0.14.1",
+    "typescript": "5.8.3",
+    "typescript-eslint": "^8.29.1"
+  }
+}
