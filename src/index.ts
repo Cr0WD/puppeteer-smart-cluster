@@ -68,8 +68,10 @@ const CreateSmartCluster = <T>({
 	showStatus,
 }: ClusterOptions<T>) => {
 	let isRunning = true
-
-	// Queue to hold pending tasks
+	
+	/**
+	 * Queue to hold pending tasks
+	 */
 	const taskQueue: {
 		task: TaskFunction<T>
 		params: T
