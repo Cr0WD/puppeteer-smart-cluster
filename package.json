@@ -54,14 +54,14 @@
     ]
   },
   "peerDependencies": {
-    "puppeteer": "^24.31.0"
+    "puppeteer": "^24.37.2"
   },
   "devDependencies": {
-    "@eslint/js": "9.39.1",
+    "@eslint/js": "10.0.1",
     "@manypkg/cli": "0.25.1",
-    "@typescript-eslint/eslint-plugin": "8.48.0",
-    "@typescript-eslint/parser": "8.48.0",
-    "eslint": "9.39.1",
+    "@typescript-eslint/eslint-plugin": "8.54.0",
+    "@typescript-eslint/parser": "8.54.0",
+    "eslint": "10.0.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-import-resolver-typescript": "4.4.4",
     "eslint-plugin-import": "2.32.0",
@@ -69,10 +69,10 @@
     "eslint-plugin-security": "3.0.1",
     "eslint-plugin-unicorn": "62.0.0",
     "install-peers-cli": "^2.2.0",
-    "prettier": "3.7.3",
-    "puppeteer": "^24.31.0",
-    "tsdx": "^0.14.1",
+    "prettier": "3.8.1",
+    "puppeteer": "^24.37.2",
+    "tsdx": "^2.0.0",
     "typescript": "5.9.3",
-    "typescript-eslint": "^8.48.0"
+    "typescript-eslint": "^8.54.0"
   }
 }
