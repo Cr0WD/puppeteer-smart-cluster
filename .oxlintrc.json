@@ -1,0 +1,79 @@
+{
+	"$schema": "https://oxc.rs/schema/oxlintrc.json",
+	"plugins": ["eslint", "typescript"],
+	"jsPlugins": [
+		{
+			"name": "import-js",
+			"specifier": "eslint-plugin-import"
+		},
+		"eslint-plugin-security"
+	],
+	"rules": {
+		"typescript/no-empty-interface": "off",
+		"typescript/no-empty-object-type": "off",
+		"typescript/no-explicit-any": "error",
+		"eslint/no-unused-vars": [
+			"error",
+			{
+				"args": "after-used",
+				"ignoreRestSiblings": true
+			}
+		],
+		"eslint/arrow-body-style": ["error", "as-needed"],
+		"import-js/no-unresolved": "error",
+		"import-js/namespace": "error",
+		"import-js/default": "error",
+		"import-js/export": "error",
+		"import-js/no-named-as-default": "warn",
+		"import-js/no-named-as-default-member": "warn",
+		"import-js/no-duplicates": "warn",
+		"import-js/first": "error",
+		"import-js/newline-after-import": ["error"],
+		"import-js/order": [
+			"error",
+			{
+				"groups": ["builtin", "external", "parent", "sibling", "index", "type"],
+				"newlines-between": "never",
+				"named": true,
+				"alphabetize": {
+					"order": "asc",
+					"caseInsensitive": true
+				}
+			}
+		],
+		"security/detect-buffer-noassert": "warn",
+		"security/detect-child-process": "warn",
+		"security/detect-disable-mustache-escape": "warn",
+		"security/detect-eval-with-expression": "warn",
+		"security/detect-new-buffer": "warn",
+		"security/detect-no-csrf-before-method-override": "warn",
+		"security/detect-non-literal-fs-filename": "warn",
+		"security/detect-non-literal-regexp": "warn",
+		"security/detect-non-literal-require": "warn",
+		"security/detect-object-injection": "off",
+		"security/detect-possible-timing-attacks": "warn",
+		"security/detect-pseudoRandomBytes": "warn",
+		"security/detect-unsafe-regex": "warn"
+	},
+	"settings": {
+		"import/resolver": {
+			"typescript": {
+				"alwaysTryTypes": true,
+				"noWarnOnMultipleProjects": true,
+				"project": ["./tsconfig.json"]
+			}
+		}
+	},
+	"ignorePatterns": [
+		"**/node_modules/**",
+		"**/package.json",
+		"**/*.lock",
+		"**/tsconfig.json",
+		"**/dist/**",
+		"**/build/**",
+		"**/*.js",
+		"**/*.mjs",
+		"**/*.cjs",
+		"**/*.d.ts"
+	]
+}
