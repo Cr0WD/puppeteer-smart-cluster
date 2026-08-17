@@ -46,19 +46,19 @@
 		]
 	},
 	"peerDependencies": {
-		"puppeteer": "^25.4.0"
+		"puppeteer": "^25.7.0"
 	},
 	"devDependencies": {
 		"@manypkg/cli": "0.25.1",
-		"bunchee": "^6.12.2",
-		"eslint": "10.8.0",
+		"bunchee": "^7.0.1",
+		"eslint": "10.8.1",
 		"eslint-import-resolver-typescript": "4.4.5",
 		"eslint-plugin-import": "2.32.0",
 		"eslint-plugin-security": "4.0.1",
 		"install-peers-cli": "^2.2.0",
-		"oxfmt": "0.61.0",
-		"oxlint": "1.76.0",
-		"puppeteer": "^25.4.0",
+		"oxfmt": "0.63.0",
+		"oxlint": "1.78.0",
+		"puppeteer": "^25.7.0",
 		"tsdx": "^2.0.0",
 		"typescript": "7.0.2"
 	}
