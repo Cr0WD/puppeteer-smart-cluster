@@ -4,164 +4,186 @@
 [![package downloads](https://img.shields.io/npm/dm/puppeteer-smart-cluster.svg?style=flat-square)](https://www.npmjs.com/package/puppeteer-smart-cluster)
 [![package license](https://img.shields.io/npm/l/puppeteer-smart-cluster.svg?style=flat-square)](https://www.npmjs.com/package/puppeteer-smart-cluster)
 
+A small, proxy-aware Puppeteer task queue. Every attempt runs in an isolated browser, concurrency is bounded, retries are finite, and shutdown is explicit.
 
-⚡ A minimal, resilient, and proxy-aware Puppeteer cluster engine for parallel scraping tasks.
+## Features
 
-## ✨ Features
+- Isolated browser per task attempt
+- Static or per-attempt asynchronous proxies
+- Configurable retry limit and backoff
+- Deterministic `start()`, `idle()`, and `stop()` lifecycle
+- Cooperative cancellation through `AbortSignal`
+- Custom Puppeteer builds and wrappers
+- Typed task and error contexts
 
-- ✅ Minimal setup, no configuration boilerplate
-- 🧠 Smart concurrency and task retries
-- 🌍 Built-in support for per-instance proxies (`string` or `async function`)
-- ⚙️ Works with custom Puppeteer builds or plugin wrappers
-- 🧹 Automatically manages browser and page lifecycle
-- 💤 Gracefully shuts down when idle
-
----
-
-## 📦 Installation
-
-### Using Yarn:
+## Installation
 
 ```bash
 yarn add puppeteer puppeteer-smart-cluster
 ```
 
-### Or with npm:
+Or:
 
 ```bash
 npm install puppeteer puppeteer-smart-cluster
 ```
 
-> `puppeteer` is a peer dependency.
+`puppeteer` is a peer dependency. Node.js 18 or newer is required.
 
----
-
-## 🚀 Quick Start
+## Quick start
 
 ```ts
-import puppeteer from 'puppeteer'
 import CreateSmartCluster from 'puppeteer-smart-cluster'
 
 const cluster = CreateSmartCluster<{ url: string }>({
 	maxWorkers: 3,
-	puppeteerInstance: puppeteer,
-	puppeteerOptions: {
-		args: ['--no-sandbox'],
-	},
-	proxy: 'http://username:password@proxyhost:port', // or async (params) => 'proxy'
-	debug: true,
+	proxy: async ({ url }) => getProxyFor(url),
+	retryLimit: 2,
+	retryDelay: ({ attempt }) => 500 * 2 ** (attempt - 1),
 })
 
-cluster.on.error((err, params) => {
-	console.error('Task failed:', err, params)
+cluster.on.error((error, parameters, context) => {
+	console.error('Task attempt failed', { error, parameters, context })
 })
 
-cluster.start()
-
-const urls = ['https://example.com', 'https://github.com', 'https://npmjs.com']
-
-for (const url of urls) {
-	cluster.addTask(async ({ page, props }) => {
+for (const url of ['https://example.com', 'https://github.com']) {
+	cluster.addTask(async ({ page, props, signal }) => {
+		if (signal.aborted) return
 		await page.goto(props.url)
-		const title = await page.title()
-		console.log(`${props.url} → ${title}`)
+		console.log(await page.title())
 	}, { url })
 }
 
+cluster.start()
 await cluster.idle()
 ```
 
----
+Tasks may be added before or while the cluster is running. Call `start()` again after the cluster has automatically stopped. Repeated `start()` calls while it is running are safe.
 
-## 🔐 Proxy Support
+## Retries and errors
 
-`puppeteer-smart-cluster` allows you to assign a different proxy to each browser instance via a simple config option:
+`retryLimit` is the number of retries after the first attempt. It defaults to `3`, so a task can run at most four times. The default delay is exponential: 1, 2, 4 seconds, capped at 30 seconds.
+
+Version 1.0 retried forever without a delay. If an existing application depends on that behavior, enable it explicitly:
 
 ```ts
-proxy: async ({ url }) => {
-	// Rotate proxies dynamically
-	return getProxyFromPool() // → 'http://user:pass@proxy:port'
+retryLimit: Number.POSITIVE_INFINITY,
+retryDelay: 0,
+```
+
+Use a fixed delay:
+
+```ts
+const cluster = CreateSmartCluster({
+	maxWorkers: 2,
+	retryLimit: 2,
+	retryDelay: 250,
+})
+```
+
+Or calculate it from the failed attempt:
+
+```ts
+retryDelay: ({ attempt, error, parameters, signal }) => {
+	signal.throwIfAborted()
+	return Math.min(1000 * 2 ** (attempt - 1), 30_000)
 }
 ```
 
-Or use a static proxy string:
+The error listener runs after every failed attempt. Its context contains:
 
 ```ts
-proxy: 'http://user:pass@proxy:port'
+interface TaskErrorContext {
+	attempt: number
+	retriesLeft: number
+	willRetry: boolean
+}
 ```
 
-The proxy is injected into each Puppeteer launch via `--proxy-server` automatically.
+When `willRetry` is `false`, the task has reached a terminal failure. Listener failures are isolated from the queue.
 
----
+## Proxy support
 
-## 🔄 Comparison with [`puppeteer-cluster`](https://www.npmjs.com/package/puppeteer-cluster)
-
-Both libraries offer powerful tools for parallelizing Puppeteer tasks — but follow different philosophies:
-
-- **`puppeteer-cluster`** is a versatile job queue with reusable browser contexts and built-in progress monitoring.
-- **`puppeteer-smart-cluster`** is minimal and focused: it gives you predictable, isolated browser execution with out-of-the-box proxy support.
-
-| Feature                        | `puppeteer-smart-cluster`                                | `puppeteer-cluster`                    |
-|--------------------------------|----------------------------------------------------------|----------------------------------------|
-| 🧠 Execution model             | Simple task queue with isolated browser per task	        | Queue-based, shared browsers optional  |
-| 🌍 Per-instance proxy support  | Built-in (`string` or `() => string \| Promise<string>`) | Requires manual integration            |
-| 🧼 Auto browser & page cleanup | Included                                                 | Requires manual handling in some cases |
-| 🔁 Task retries                | Failed tasks are automatically re-queued                 | Retry logic handled manually           |
-| 📊 Monitoring & progress UI    | Minimal debug output if needed (you control logging)     | Built-in dashboard and job stats       |
-| 🎯 Concurrency control         | Not exposed — runs `maxWorkers` parallel browsers        | Fine-grained concurrency configuration |
-
-**Use `puppeteer-cluster`** for advanced orchestration, persistent contexts, or when you need to fine-tune concurrency.  
-**Choose `puppeteer-smart-cluster`** if you want a focused, proxy-friendly, and easy-to-use system that just works.
-
----
-
-## ⚙️ API
-
-### `CreateSmartCluster<T>(options: ClusterOptions<T>)`
+A proxy can be fixed for the whole cluster:
 
 ```ts
-type TaskFunction<T> = (params: {
-	page: puppeteer.Page
-	props: T
-	proxy?: string
-}) => Promise<void>
+proxy: 'http://proxyhost:port'
 ```
 
-| Option                | Type                                  | Description |
-|-----------------------|---------------------------------------|-------------|
-| `maxWorkers`          | `number`                              | Max concurrent browsers |
-| `proxy?`              | `string \| (params: T) => Promise<string>` | Static or per-task proxy |
-| `puppeteerOptions?`   | `puppeteer.LaunchOptions`             | Passed to `puppeteer.launch()` |
-| `puppeteerInstance?`  | `typeof puppeteer`                    | Custom Puppeteer instance |
-| `poolingTime?`        | `number`                              | Poll interval in ms (default: `500`) |
-| `iterationsBeforeStop?` | `number`                            | Empty loop rounds before stopping (default: `1`) |
-| `debug?`              | `boolean`                             | Enable debug logs |
-| `showStatus?`         | `boolean`                             | Log task queue/browser status every tick |
-
----
-
-## 🧼 Cleanup & Shutdown
-
-Use `.idle()` to wait until all tasks complete:
+Or selected for each attempt:
 
 ```ts
-await cluster.idle()
+proxy: async (parameters, signal) => {
+	signal.throwIfAborted()
+	return getProxyFor(parameters)
+}
 ```
 
-Or stop the cluster manually:
+The proxy is passed to Puppeteer as `--proxy-server=...` and exposed to the task as `proxy`.
+
+For an authenticated HTTP proxy, keep credentials out of the browser process arguments:
 
 ```ts
-await cluster.stop()
+proxy: {
+	server: 'http://proxyhost:port',
+	username: 'username',
+	password: 'password',
+}
 ```
 
----
+The cluster applies these credentials with `page.authenticate()` before executing the task. For compatibility with 1.0, credentials inside a proxy URL are also accepted and are removed from the Chrome process arguments automatically.
+Do not combine the `proxy` option with a manual `--proxy-server` launch argument.
 
-## 🪪 License
+## Compatibility with 1.0
 
-[MIT](./LICENSE) — © [Denis Orlov](https://github.com/Cr0WD)
+Version 1.1 preserves the documented 1.0 API: existing cluster options, string and function proxies, task callbacks, `start()`, `addTask()`, `idle()`, `stop()`, and `on.error()` remain valid. New callback fields and error metadata are additive.
 
----
+The intentional behavioral change is the default retry budget. Failed tasks now stop after three retries instead of retrying forever. Use the legacy retry configuration above when infinite retries are required. Native CommonJS and ESM imports now both work without changing existing default-import code.
 
-## 🙋‍♂️ Questions or ideas?
+## Lifecycle
 
-Open an [issue](https://github.com/Cr0WD/puppeteer-smart-cluster/issues) or contribute via PR.
+`start()` begins dispatching queued tasks. It is idempotent while the cluster is running. `idle()` only waits; it never starts a stopped cluster.
+
+`idle()` resolves when the current queue, active attempts, and retry delays are empty. Each call observes the current work, so it can be used across multiple task batches.
+
+`stop()` clears queued tasks, aborts active task signals, closes active browsers, cancels retry delays, and waits for active task functions to settle. A task can react to cancellation:
+
+```ts
+cluster.addTask(async ({ page, props, signal }) => {
+	signal.throwIfAborted()
+	await page.goto(props.url)
+}, { url })
+```
+
+Task functions should finish when their signal is aborted. Browser closure also interrupts most active Puppeteer operations.
+
+After the queue becomes idle, the cluster automatically changes to the stopped state. The grace period is `poolingTime * iterationsBeforeStop` and defaults to 500 ms. This only changes lifecycle state; `idle()` resolves as soon as work is complete.
+
+## Options
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `maxWorkers` | `number` | required | Maximum concurrent browsers |
+| `proxy` | `ProxyValue \| (parameters: T, signal: AbortSignal) => ProxyValue \| Promise<ProxyValue>` | none | Proxy source evaluated for each attempt |
+| `puppeteerOptions` | `LaunchOptions` | none | Options passed to `puppeteer.launch()` |
+| `puppeteerInstance` | `Partial<typeof puppeteer>` | Puppeteer | Custom Puppeteer implementation |
+| `retryLimit` | `number` | `3` | Retries after the first attempt |
+| `retryDelay` | `number \| RetryDelay<T>` | exponential | Delay before each retry |
+| `poolingTime` | `number` | `500` | Idle grace period unit in milliseconds |
+| `iterationsBeforeStop` | `number` | `1` | Number of idle grace period units |
+| `debug` | `boolean` | `false` | Log task execution and cleanup errors |
+| `showStatus` | `boolean` | `false` | Log dispatcher status |
+
+Numeric options are validated when the cluster is created. A dynamic retry delay is validated before it is used.
+
+## Development
+
+```bash
+yarn validate
+```
+
+This runs linting, formatting and type checks, a production build, and the test suite.
+
+## License
+
+[MIT](./LICENSE) © [Denis Orlov](https://github.com/Cr0WD)

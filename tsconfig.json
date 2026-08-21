@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
-	"allowJs": true,
+	"allowJs": false,
 	"composite": false,
 	"declaration": true,
 	"declarationMap": true,
@@ -15,12 +15,13 @@
 	  "esnext"
 	],
 	"module": "ESNext",
-	"moduleResolution": "node",
-	"noUnusedLocals": false,
-	"noUnusedParameters": false,
+	"moduleResolution": "Bundler",
+	"noUnusedLocals": true,
+	"noUnusedParameters": true,
 	"preserveWatchOutput": true,
 	"skipLibCheck": true,
 	"strict": true,
+	"rootDir": "src",
 	"target": "ES2022"
   },
   "display": "Default",
@@ -29,8 +30,5 @@
 	"build",
 	"node_modules"
   ],
-  "include": [
-	"**/*.ts",
-	"**/*.tsx"
-  ]
+  "include": ["src/**/*.ts"]
 }

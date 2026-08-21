@@ -1,62 +1,162 @@
-// noinspection OverlyNestedFunctionJS
-
 import puppeteer, { Browser, LaunchOptions, Page } from 'puppeteer'
 
-/**
- * Type definition for a proxy function that returns a proxy URL as a string based on input parameters.
- */
-export type ProxyFunction<T> = string | ((parameters: T) => string | Promise<string>)
+export interface ProxyConfiguration {
+	server: string
+	username?: string
+	password?: string
+}
 
-/**
- * Type definition for the scraping task function.
- * - page: Puppeteer Page instance.
- * - props: Parameters passed to the task.
- * - proxy: Optional proxy string used for the browser session.
- */
-export type TaskFunction<T, R = void> = ({
-	page,
-	props,
-	proxy,
-}: {
+export type ProxyValue = string | ProxyConfiguration
+
+export type ProxyFunction<T> =
+	| ProxyValue
+	| ((parameters: T, signal: AbortSignal) => ProxyValue | Promise<ProxyValue>)
+
+export interface TaskContext<T> {
 	page: Page
 	props: T
 	proxy?: string
-}) => Promise<R>
+	signal: AbortSignal
+}
 
-/**
- * Configuration options for creating a smart Puppeteer cluster.
- */
+export type TaskFunction<T, R = void> = (context: TaskContext<T>) => Promise<R>
+
+export interface RetryContext<T> {
+	attempt: number
+	error: Error
+	parameters: T
+	signal: AbortSignal
+}
+
+export type RetryDelay<T> = number | ((context: RetryContext<T>) => number | Promise<number>)
+
+export interface TaskErrorContext {
+	attempt: number
+	retriesLeft: number
+	willRetry: boolean
+}
+
 export interface ClusterOptions<T> {
-	/** Optional proxy string or a function returning a proxy URL based on task parameters */
-	proxy?: ProxyFunction<T> | string
+	/** Optional proxy string or a function returning a proxy URL for each attempt. */
+	proxy?: ProxyFunction<T>
 
-	/** Maximum number of browser instances to run in parallel */
+	/** Maximum number of browser instances running in parallel. */
 	maxWorkers: number
 
-	/** Delay (in ms) between polling for new tasks when the queue is empty */
+	/** Idle grace period unit in milliseconds. */
 	poolingTime?: number
 
-	/** Options passed directly to puppeteer.launch() */
+	/** Options passed directly to puppeteer.launch(). */
 	puppeteerOptions?: LaunchOptions
 
-	/** Custom Puppeteer instance (useful for mocking or custom-builds) */
+	/** Custom Puppeteer instance, useful for wrappers and tests. */
 	puppeteerInstance?: Partial<typeof puppeteer>
 
-	/** Number of empty polling iterations before the cluster automatically shuts down */
+	/** Number of idle grace period units before automatic shutdown. */
 	iterationsBeforeStop?: number
 
-	/** Enable debug logging */
+	/** Maximum number of retries after the first attempt. */
+	retryLimit?: number
+
+	/** Fixed or dynamic delay before a retry. */
+	retryDelay?: RetryDelay<T>
+
+	/** Enable debug logging. */
 	debug?: boolean
 
-	/** Show task queue and browser status in logs */
+	/** Log queue and browser status whenever the dispatcher runs. */
 	showStatus?: boolean
 }
 
-const defaultPoolingTime = 500
+interface QueuedTask<T> {
+	attempt: number
+	controller: AbortController
+	task: TaskFunction<T, unknown>
+	parameters: T
+}
 
-/**
- * Main factory function to create a smart puppeteer cluster with concurrency, task retries, and proxy support.
- */
+type ClusterState = 'running' | 'stopped' | 'stopping'
+
+const defaultPoolingTime = 500
+const defaultRetryLimit = 3
+const maximumTimerDelay = 2_147_483_647
+
+const defaultRetryDelay = ({ attempt }: RetryContext<unknown>) =>
+	Math.min(1000 * 2 ** (attempt - 1), 30_000)
+
+const toError = (value: unknown): Error => {
+	if (value instanceof Error) return value
+	return new Error(String(value))
+}
+
+const assertNonNegativeInteger = (name: string, value: number) => {
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new RangeError(`${name} must be a non-negative integer`)
+	}
+}
+
+const assertNonNegativeFiniteNumber = (name: string, value: number) => {
+	if (!Number.isFinite(value) || value < 0) {
+		throw new RangeError(`${name} must be a non-negative finite number`)
+	}
+}
+
+const assertTimerDelay = (name: string, value: number) => {
+	assertNonNegativeFiniteNumber(name, value)
+	if (value > maximumTimerDelay) {
+		throw new RangeError(`${name} must not exceed ${maximumTimerDelay}`)
+	}
+}
+
+const parseProxyServer = (server: unknown): ProxyConfiguration => {
+	if (typeof server !== 'string' || server.trim().length === 0) {
+		throw new TypeError('proxy server must not be empty')
+	}
+	const normalizedServer = server.trim()
+
+	let url: URL | undefined
+	try {
+		url = new URL(normalizedServer)
+	} catch {
+		url = undefined
+	}
+	if (url && (url.username || url.password)) {
+		const username = decodeURIComponent(url.username)
+		const password = decodeURIComponent(url.password)
+		url.username = ''
+		url.password = ''
+		return { server: url.toString(), username, password }
+	}
+
+	const bareCredentials = normalizedServer.match(/^([^/@\s]+):([^/@\s]*)@(.+)$/)
+	if (bareCredentials) {
+		return {
+			server: bareCredentials[3],
+			username: decodeURIComponent(bareCredentials[1]),
+			password: decodeURIComponent(bareCredentials[2]),
+		}
+	}
+	return { server: normalizedServer }
+}
+
+const normalizeProxy = (value?: ProxyValue): ProxyConfiguration | undefined => {
+	if (value === undefined) return
+	if (typeof value === 'string') return parseProxyServer(value)
+	const parsedProxy = parseProxyServer(value.server)
+	let username = parsedProxy.username
+	let password = parsedProxy.password
+	if (value.username !== undefined) username = value.username
+	if (value.password !== undefined) password = value.password
+	return {
+		server: parsedProxy.server,
+		username,
+		password,
+	}
+}
+
+const getProxyArguments = (args: string[]) =>
+	args.filter(argument => argument.startsWith('--proxy-server='))
+
 const CreateSmartCluster = <T>({
 	proxy,
 	maxWorkers,
@@ -64,247 +164,318 @@ const CreateSmartCluster = <T>({
 	puppeteerInstance = puppeteer,
 	poolingTime = defaultPoolingTime,
 	iterationsBeforeStop = 1,
-	debug,
-	showStatus,
+	retryLimit = defaultRetryLimit,
+	retryDelay = defaultRetryDelay,
+	debug = false,
+	showStatus = false,
 }: ClusterOptions<T>) => {
-	let isRunning = true
+	if (!Number.isSafeInteger(maxWorkers) || maxWorkers < 1) {
+		throw new RangeError('maxWorkers must be a positive integer')
+	}
+	assertNonNegativeFiniteNumber('poolingTime', poolingTime)
+	assertNonNegativeInteger('iterationsBeforeStop', iterationsBeforeStop)
+	if (retryLimit !== Number.POSITIVE_INFINITY) {
+		assertNonNegativeInteger('retryLimit', retryLimit)
+	}
+	if (typeof retryDelay === 'number') {
+		assertTimerDelay('retryDelay', retryDelay)
+	}
+	if (typeof proxy !== 'function') normalizeProxy(proxy)
+	const proxyArguments = getProxyArguments(puppeteerOptions?.args ?? [])
+	if (proxy !== undefined && proxyArguments.length > 0) {
+		throw new TypeError('proxy cannot be combined with a --proxy-server argument')
+	}
+	for (const argument of proxyArguments) {
+		const parsedProxy = parseProxyServer(argument.slice('--proxy-server='.length))
+		if (parsedProxy.username !== undefined || parsedProxy.password !== undefined) {
+			throw new TypeError('proxy credentials cannot be used in a --proxy-server argument')
+		}
+	}
+	const idleStopDelay = poolingTime * iterationsBeforeStop
+	assertTimerDelay('poolingTime * iterationsBeforeStop', idleStopDelay)
 
-	/**
-	 * Queue to hold pending tasks
-	 */
-	const taskQueue: {
-		task: TaskFunction<T>
-		params: T
-	}[] = []
+	let state: ClusterState = 'stopped'
+	let idleTimer: ReturnType<typeof setTimeout> | undefined
+	let stopPromise: Promise<void> | undefined
+	const taskQueue: QueuedTask<T>[] = []
+	const activeRuns = new Set<Promise<void>>()
+	const activeBrowsers = new Set<Browser>()
+	const browserClosures = new WeakMap<Browser, Promise<void>>()
+	const taskControllers = new Set<AbortController>()
+	const retryTimers = new Map<QueuedTask<T>, ReturnType<typeof setTimeout>>()
+	const idleWaiters = new Set<() => void>()
+	let onErrorCallback:
+		| ((error: Error, parameters?: T, context?: TaskErrorContext) => void)
+		| undefined
 
-	/**
-	 * Count of currently executing tasks
-	 */
-	let activeTasks = 0
+	const clearIdleTimer = () => {
+		if (!idleTimer) return
+		clearTimeout(idleTimer)
+		idleTimer = undefined
+	}
 
-	/**
-	 * Array to track active browser instances
-	 */
-	const activeBrowsers: Browser[] = []
+	const isIdle = () => taskQueue.length === 0 && activeRuns.size === 0 && retryTimers.size === 0
 
-	/**
-	 * Hook to notify when all tasks are completed
-	 */
-	let resolveTasksCompleted: () => void
-	const tasksCompleted = new Promise<void>(resolve => {
-		resolveTasksCompleted = resolve
-	})
+	const resolveIdleWaiters = () => {
+		if (!isIdle()) return
+		for (const resolve of idleWaiters) resolve()
+		idleWaiters.clear()
+	}
 
-	/**
-	 * Worker loop that keeps polling for tasks and executing them.
-	 */
-	async function worker() {
+	const emitError = (error: Error, parameters: T, context: TaskErrorContext) => {
+		if (!onErrorCallback) return
 		try {
-			let emptyQueueIteration = 0
-
-			while (isRunning) {
-				if (showStatus)
-					console.debug(
-						JSON.stringify({
-							taskQueue: taskQueue.length,
-							activeTasks,
-							activeBrowsers: activeBrowsers.length,
-						})
-					)
-
-				/**
-				 * Check if we can process a new task
-				 */
-				if (
-					taskQueue.length > 0 &&
-					activeTasks < maxWorkers &&
-					activeBrowsers.length < maxWorkers
-				) {
-					emptyQueueIteration = 0
-					try {
-						const { task, params } = taskQueue.shift()!
-
-						/**
-						 * Execute the task asynchronously
-						 */
-						;(async () => {
-							try {
-								let usedProxy: string | undefined
-								if (typeof proxy === 'string') {
-									usedProxy = proxy
-								} else if (typeof proxy === 'function') {
-									usedProxy = await proxy(params)
-								}
-
-								const browser = await createWorker(usedProxy)
-								if (!browser) {
-									activeTasks--
-									return
-								}
-								activeBrowsers.push(browser)
-
-								/**
-								 * Execute the task and cleanup after completion
-								 */
-								// eslint-disable-next-line promise/catch-or-return
-								executeTask(browser, task, params, usedProxy).finally(() => {
-									const index = activeBrowsers.indexOf(browser)
-									if (index === -1) return
-									activeTasks--
-									activeBrowsers.splice(index, 1)
-								})
-							} catch (error) {
-								activeTasks--
-								if (debug) console.error('Error caught inside worker:', error)
-								if (isRunning) taskQueue.unshift({ task, params })
-								onErrorCallback?.(error as Error, params)
-							}
-						})()
-						activeTasks++
-					} catch {
-						/**
-						 * Ignore minor synchronous failures
-						 */
-					}
-				} else {
-					const noActiveTasks = activeTasks === 0
-					const noBrowsersRunning = activeBrowsers.length === 0
-					const noTasksQueued = taskQueue.length === 0
-					const reachedStopThreshold = emptyQueueIteration >= iterationsBeforeStop
-
-					// noinspection OverlyComplexBooleanExpressionJS
-					if (
-						noActiveTasks &&
-						noBrowsersRunning &&
-						noTasksQueued &&
-						reachedStopThreshold
-					) {
-						isRunning = false
-					}
-
-					/**
-					 * Nothing to do, wait a bit before polling again
-					 */
-					emptyQueueIteration++
-					await new Promise(resolve => {
-						setTimeout(resolve, poolingTime)
-					})
-				}
-			}
-
-			/**
-			 * All tasks finished
-			 */
-			resolveTasksCompleted()
-			if (debug) console.error('All tasks completed')
-
-			/**
-			 * Close any remaining browsers
-			 */
-			await Promise.all(activeBrowsers.map(browser => browser.close()))
-		} catch (error) {
-			if (debug) console.error('Global worker error caught:', error)
-			onErrorCallback?.(error as Error)
+			onErrorCallback(error, parameters, context)
+		} catch (callbackError) {
+			if (debug) console.error('Error listener failed:', callbackError)
 		}
 	}
 
-	/**
-	 * Create a Puppeteer browser instance with an optional proxy.
-	 */
-	async function createWorker(usedProxy?: string): Promise<Browser | undefined> {
-		if (!puppeteerInstance.launch) return
+	const closeBrowser = async (browser: Browser, page?: Page) => {
+		const existingClosure = browserClosures.get(browser)
+		if (existingClosure) return existingClosure
+
+		const closure = (async () => {
+			if (page) {
+				try {
+					await page.close()
+				} catch (error) {
+					if (debug) console.error('Error closing page:', error)
+				}
+			}
+
+			try {
+				await browser.close()
+			} catch (error) {
+				if (debug) console.error('Error closing browser:', error)
+			} finally {
+				activeBrowsers.delete(browser)
+			}
+		})()
+		browserClosures.set(browser, closure)
+		return closure
+	}
+
+	const createBrowser = async (usedProxy?: string): Promise<Browser> => {
+		if (!puppeteerInstance.launch) {
+			throw new Error('puppeteerInstance.launch is required')
+		}
+
+		const args = [...(puppeteerOptions?.args ?? [])]
+		if (usedProxy) args.unshift(`--proxy-server=${usedProxy}`)
+
 		return puppeteerInstance.launch({
 			...puppeteerOptions,
-			args: [
-				...(usedProxy ? [`--proxy-server=${usedProxy}`] : []),
-				...(puppeteerOptions?.args || []),
-			],
+			args,
 		})
 	}
 
-	/**
-	 * Error callback hook
-	 */
-	let onErrorCallback: ((error: Error, parameters?: T) => void) | null = null
+	const getProxy = async (parameters: T, signal: AbortSignal) => {
+		if (typeof proxy === 'function') {
+			return normalizeProxy(await proxy(parameters, signal))
+		}
+		return normalizeProxy(proxy)
+	}
 
-	/**
-	 * Executes the given task inside a browser and page context.
-	 */
-	async function executeTask(
-		browser: Browser,
-		task: TaskFunction<T>,
-		parameters: T,
-		usedProxy?: string
-	): Promise<void> {
-		const [page] = await browser.pages()
+	const getRetryDelay = async (context: RetryContext<T>) => {
+		let delay: number
+		if (typeof retryDelay === 'function') {
+			delay = await retryDelay(context)
+		} else {
+			delay = retryDelay
+		}
+		assertTimerDelay('retryDelay result', delay)
+		return delay
+	}
+
+	const executeAttempt = async (queuedTask: QueuedTask<T>) => {
+		let browser: Browser | undefined
+		let page: Page | undefined
+		queuedTask.controller.signal.throwIfAborted()
+		const usedProxy = await getProxy(queuedTask.parameters, queuedTask.controller.signal)
+
 		try {
-			if (debug) console.log('Executing task...')
-			await task({ page, props: parameters, proxy: usedProxy })
-			if (debug) console.log('Task executed successfully.')
-		} catch (error) {
-			if (debug) console.error('Error caught inside executeTask:', error)
-			if (isRunning) taskQueue.unshift({ task, params: parameters })
-			onErrorCallback?.(error as Error, parameters)
-		} finally {
-			try {
-				await page.close()
-				await browser.close()
-			} catch {
-				/**
-				 * Ignore cleanup errors
-				 */
+			browser = await createBrowser(usedProxy?.server)
+			activeBrowsers.add(browser)
+			queuedTask.controller.signal.throwIfAborted()
+			const pages = await browser.pages()
+			page = pages[0]
+			if (!page) page = await browser.newPage()
+			if (usedProxy?.username !== undefined || usedProxy?.password !== undefined) {
+				await page.authenticate({
+					username: usedProxy.username ?? '',
+					password: usedProxy.password ?? '',
+				})
 			}
+			await queuedTask.task({
+				page,
+				props: queuedTask.parameters,
+				proxy: usedProxy?.server,
+				signal: queuedTask.controller.signal,
+			})
+		} finally {
+			if (browser) await closeBrowser(browser, page)
 		}
 	}
 
-	/**
-	 * Public API of the cluster
-	 */
-	return {
-		/**
-		 * Starts the worker loop
-		 */
-		start() {
-			isRunning = true
-			worker()
-		},
+	const scheduleRetry = (queuedTask: QueuedTask<T>, delay: number) => {
+		const timer = setTimeout(() => {
+			retryTimers.delete(queuedTask)
+			if (state === 'running' && !queuedTask.controller.signal.aborted) {
+				queuedTask.attempt++
+				taskQueue.push(queuedTask)
+			} else {
+				taskControllers.delete(queuedTask.controller)
+			}
+			dispatch()
+			resolveIdleWaiters()
+			scheduleAutomaticStop()
+		}, delay)
+		retryTimers.set(queuedTask, timer)
+	}
 
-		/**
-		 * Stops the cluster and clears the queue
-		 */
-		async stop() {
-			isRunning = false
-			taskQueue.length = 0
+	const runTask = async (queuedTask: QueuedTask<T>) => {
+		let retryScheduled = false
 
-			for (const browser of activeBrowsers) {
+		try {
+			if (debug) console.debug(`Executing task attempt ${queuedTask.attempt}`)
+			await executeAttempt(queuedTask)
+		} catch (value) {
+			const error = toError(value)
+			const retriesLeft = retryLimit - queuedTask.attempt + 1
+			let willRetry = state === 'running' && retriesLeft > 0
+			let delay = 0
+
+			if (willRetry) {
 				try {
-					await browser.close()
-				} catch (error) {
-					if (debug) console.error('Error closing browser:', error)
+					delay = await getRetryDelay({
+						attempt: queuedTask.attempt,
+						error,
+						parameters: queuedTask.parameters,
+						signal: queuedTask.controller.signal,
+					})
+				} catch (retryDelayError) {
+					willRetry = false
+					emitError(error, queuedTask.parameters, {
+						attempt: queuedTask.attempt,
+						retriesLeft: Math.max(0, retriesLeft),
+						willRetry,
+					})
+					emitError(toError(retryDelayError), queuedTask.parameters, {
+						attempt: queuedTask.attempt,
+						retriesLeft: 0,
+						willRetry,
+					})
+					return
 				}
 			}
 
-			activeBrowsers.length = 0
-			activeTasks = 0
+			willRetry = willRetry && state === 'running' && !queuedTask.controller.signal.aborted
+			if (willRetry) {
+				scheduleRetry(queuedTask, delay)
+				retryScheduled = true
+			}
+			emitError(error, queuedTask.parameters, {
+				attempt: queuedTask.attempt,
+				retriesLeft: Math.max(0, retriesLeft),
+				willRetry,
+			})
+		} finally {
+			if (!retryScheduled) taskControllers.delete(queuedTask.controller)
+		}
+	}
+
+	const scheduleAutomaticStop = () => {
+		if (state !== 'running' || !isIdle() || idleTimer) return
+		idleTimer = setTimeout(() => {
+			idleTimer = undefined
+			if (state === 'running' && isIdle()) state = 'stopped'
+		}, idleStopDelay)
+	}
+
+	function dispatch() {
+		if (showStatus) {
+			console.debug(
+				JSON.stringify({
+					state,
+					taskQueue: taskQueue.length,
+					activeTasks: activeRuns.size,
+					activeBrowsers: activeBrowsers.size,
+					retryingTasks: retryTimers.size,
+				})
+			)
+		}
+
+		clearIdleTimer()
+		while (state === 'running' && activeRuns.size < maxWorkers) {
+			const queuedTask = taskQueue.shift()
+			if (!queuedTask) break
+
+			const run = runTask(queuedTask)
+			activeRuns.add(run)
+			void run.finally(() => {
+				activeRuns.delete(run)
+				dispatch()
+				resolveIdleWaiters()
+				scheduleAutomaticStop()
+			})
+		}
+
+		resolveIdleWaiters()
+		scheduleAutomaticStop()
+	}
+
+	return {
+		start() {
+			if (state === 'stopping') {
+				throw new Error('Cannot start the cluster while it is stopping')
+			}
+			if (state === 'running') return
+			state = 'running'
+			dispatch()
 		},
 
-		/**
-		 * Adds a new task to the queue
-		 */
-		addTask(task: TaskFunction<T>, parameters: T) {
-			taskQueue.push({ task, params: parameters })
+		async stop() {
+			if (stopPromise) return stopPromise
+			state = 'stopping'
+			clearIdleTimer()
+			taskQueue.length = 0
+			for (const timer of retryTimers.values()) clearTimeout(timer)
+			retryTimers.clear()
+			for (const controller of taskControllers) controller.abort()
+			taskControllers.clear()
+
+			stopPromise = (async () => {
+				await Promise.allSettled(
+					Array.from(activeBrowsers, browser => closeBrowser(browser))
+				)
+				await Promise.allSettled(activeRuns)
+				state = 'stopped'
+				stopPromise = undefined
+				resolveIdleWaiters()
+			})()
+			return stopPromise
 		},
 
-		/**
-		 * Returns a promise that resolves when all tasks are completed
-		 */
-		idle: () => tasksCompleted,
+		addTask<R>(task: TaskFunction<T, R>, parameters: T) {
+			if (state === 'stopping') {
+				throw new Error('Cannot add a task while the cluster is stopping')
+			}
+			const controller = new AbortController()
+			taskControllers.add(controller)
+			taskQueue.push({ attempt: 1, controller, task, parameters })
+			if (state === 'running') dispatch()
+		},
 
-		/**
-		 * Register an error listener
-		 */
+		idle() {
+			if (isIdle()) return Promise.resolve()
+			return new Promise<void>(resolve => {
+				idleWaiters.add(resolve)
+			})
+		},
+
 		on: {
-			error(callback: (error: Error, parameters?: T) => void) {
+			error(callback: (error: Error, parameters?: T, context?: TaskErrorContext) => void) {
 				onErrorCallback = callback
 			},
 		},
