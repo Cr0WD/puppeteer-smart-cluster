@@ -1,4 +1,5 @@
-import puppeteer, { Browser, LaunchOptions, Page } from 'puppeteer'
+import type puppeteer from 'puppeteer'
+import type { Browser, LaunchOptions, Page } from 'puppeteer'
 
 export interface ProxyConfiguration {
 	server: string
@@ -161,7 +162,7 @@ const CreateSmartCluster = <T>({
 	proxy,
 	maxWorkers,
 	puppeteerOptions,
-	puppeteerInstance = puppeteer,
+	puppeteerInstance,
 	poolingTime = defaultPoolingTime,
 	iterationsBeforeStop = 1,
 	retryLimit = defaultRetryLimit,
@@ -207,6 +208,7 @@ const CreateSmartCluster = <T>({
 	let onErrorCallback:
 		| ((error: Error, parameters?: T, context?: TaskErrorContext) => void)
 		| undefined
+	let defaultPuppeteerPromise: Promise<Partial<typeof puppeteer>> | undefined
 
 	const clearIdleTimer = () => {
 		if (!idleTimer) return
@@ -257,14 +259,19 @@ const CreateSmartCluster = <T>({
 	}
 
 	const createBrowser = async (usedProxy?: string): Promise<Browser> => {
-		if (!puppeteerInstance.launch) {
+		let resolvedPuppeteer = puppeteerInstance
+		if (!resolvedPuppeteer) {
+			defaultPuppeteerPromise ??= import('puppeteer').then(module => module.default)
+			resolvedPuppeteer = await defaultPuppeteerPromise
+		}
+		if (!resolvedPuppeteer.launch) {
 			throw new Error('puppeteerInstance.launch is required')
 		}
 
 		const args = [...(puppeteerOptions?.args ?? [])]
 		if (usedProxy) args.unshift(`--proxy-server=${usedProxy}`)
 
-		return puppeteerInstance.launch({
+		return resolvedPuppeteer.launch({
 			...puppeteerOptions,
 			args,
 		})
