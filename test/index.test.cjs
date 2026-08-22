@@ -10,6 +10,8 @@ const delay = milliseconds =>
 test('exposes native CommonJS and ESM entrypoints', async () => {
 	assert.equal(typeof CreateSmartCluster, 'function')
 	assert.equal(CreateSmartCluster.default, CreateSmartCluster)
+	// The build creates the package self-reference before the tests run.
+	// eslint-disable-next-line import-js/no-unresolved
 	const esmModule = await import('puppeteer-smart-cluster')
 	assert.equal(typeof esmModule.default, 'function')
 })

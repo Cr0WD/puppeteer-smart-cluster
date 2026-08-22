@@ -19,8 +19,8 @@ jobs:
           - 22
           - 24
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: yarn
@@ -30,14 +30,14 @@ jobs:
   runtime-node-18:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: yarn
       - run: yarn install --frozen-lockfile --ignore-scripts
       - run: yarn build
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 18
       - run: node --test test/index.test.cjs
