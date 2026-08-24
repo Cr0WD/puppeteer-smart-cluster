@@ -51,7 +51,7 @@
 		"access": "public"
 	},
 	"peerDependencies": {
-		"puppeteer": "^25.7.0"
+		"puppeteer": "^25.8.0"
 	},
 	"devDependencies": {
 		"@typescript/typescript6": "6.0.2",
@@ -60,9 +60,9 @@
 		"eslint-import-resolver-typescript": "4.4.5",
 		"eslint-plugin-import": "2.32.0",
 		"eslint-plugin-security": "4.0.1",
-		"oxfmt": "0.63.0",
-		"oxlint": "1.78.0",
-		"puppeteer": "^25.7.0",
+		"oxfmt": "0.64.0",
+		"oxlint": "1.79.0",
+		"puppeteer": "^25.8.0",
 		"tsdx": "^2.0.0",
 		"typescript": "7.0.2"
 	}
