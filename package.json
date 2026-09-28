@@ -51,18 +51,18 @@
 		"access": "public"
 	},
 	"peerDependencies": {
-		"puppeteer": "^25.11.0"
+		"puppeteer": "^25.12.0"
 	},
 	"devDependencies": {
 		"@typescript/typescript6": "6.0.2",
 		"bunchee": "^7.0.1",
-		"eslint": "10.10.0",
+		"eslint": "10.11.0",
 		"eslint-import-resolver-typescript": "4.4.5",
 		"eslint-plugin-import": "2.32.0",
 		"eslint-plugin-security": "4.0.1",
-		"oxfmt": "0.68.0",
-		"oxlint": "1.83.0",
-		"puppeteer": "^25.11.0",
+		"oxfmt": "0.70.0",
+		"oxlint": "1.85.0",
+		"puppeteer": "^25.12.0",
 		"tsdx": "^2.0.0",
 		"typescript": "7.0.2"
 	}
